@@ -36,6 +36,12 @@ def store_sample(sample):
         connection.execute(insert(telemetry).values(**sample))
 
 
+def robot_count():
+    query = select(func.count(telemetry.c.robot_id.distinct()))
+    with engine.connect() as connection:
+        return connection.execute(query).scalar_one()
+
+
 def latest_samples():
     latest_ids = select(func.max(telemetry.c.id)).group_by(telemetry.c.robot_id)
     query = select(*sample_columns).where(telemetry.c.id.in_(latest_ids)).order_by(telemetry.c.id)

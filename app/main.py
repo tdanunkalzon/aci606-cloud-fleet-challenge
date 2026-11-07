@@ -6,7 +6,8 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 import os
@@ -56,6 +57,16 @@ class PredictionRequest(Telemetry):
     pass
 
 
+@app.exception_handler(RequestValidationError)
+async def invalid_request(_: Request, exc: RequestValidationError):
+    # The original input can contain NaN or Infinity, which JSON cannot encode.
+    detail = [
+        {"loc": error["loc"], "msg": error["msg"], "type": error["type"]}
+        for error in exc.errors()
+    ]
+    return JSONResponse(status_code=422, content={"detail": detail})
+
+
 STARTED = perf_counter()
 METRICS_LOCK = Lock()
 TELEMETRY_REQUESTS = 0
@@ -91,7 +102,7 @@ def health() -> dict:
         "status": "ok",
         "service": "aci606-cloud-fleet",
         "version": app.version,
-        "robots": len(db.latest_samples()),
+        "robots": db.robot_count(),
         "utc": datetime.now(timezone.utc).isoformat(),
     }
 
