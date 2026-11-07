@@ -1,22 +1,34 @@
 from __future__ import annotations
 
-from collections import defaultdict, deque
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 import os
 from functools import lru_cache
+from threading import Lock
 from time import perf_counter
 
 import joblib
 import pandas as pd
 
+from . import db
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    db.init_db()
+    load_prediction_model()
+    yield
+
+
 app = FastAPI(
+    lifespan=lifespan,
     title="ACI606 Cloud Fleet Challenge",
     version="0.1.0-starter",
     description="Starter API for the ACI606 Cloud Fleet Challenge.",
@@ -26,6 +38,8 @@ Status = Literal["NORMAL", "WARNING", "CRITICAL"]
 
 
 class Telemetry(BaseModel):
+    model_config = ConfigDict(allow_inf_nan=False)
+
     robot_id: str = Field(min_length=1, max_length=20)
     timestamp: float
     x: float
@@ -42,11 +56,33 @@ class PredictionRequest(Telemetry):
     pass
 
 
-# Starter storage: intentionally volatile.
-# Students must replace this with persistent storage for the final challenge.
-LATEST: dict[str, Telemetry] = {}
-HISTORY: dict[str, deque[Telemetry]] = defaultdict(lambda: deque(maxlen=100))
-REQUEST_COUNT = 0
+STARTED = perf_counter()
+METRICS_LOCK = Lock()
+TELEMETRY_REQUESTS = 0
+PREDICTION_REQUESTS = 0
+ERRORS = 0
+PREDICTION_TIME_MS = 0.0
+
+
+@app.middleware("http")
+async def record_metrics(request: Request, call_next):
+    global TELEMETRY_REQUESTS, PREDICTION_REQUESTS, ERRORS, PREDICTION_TIME_MS
+    telemetry_request = request.method == "POST" and request.url.path == "/telemetry"
+    prediction_request = request.method == "POST" and request.url.path == "/predict"
+    started = perf_counter()
+    status = 500
+    try:
+        response = await call_next(request)
+        status = response.status_code
+        return response
+    finally:
+        elapsed_ms = (perf_counter() - started) * 1000
+        with METRICS_LOCK:
+            TELEMETRY_REQUESTS += int(telemetry_request)
+            PREDICTION_REQUESTS += int(prediction_request)
+            ERRORS += int(status >= 400)
+            if prediction_request:
+                PREDICTION_TIME_MS += elapsed_ms
 
 
 @app.get("/health")
@@ -55,35 +91,32 @@ def health() -> dict:
         "status": "ok",
         "service": "aci606-cloud-fleet",
         "version": app.version,
-        "robots_in_memory": len(LATEST),
+        "robots": len(db.latest_samples()),
         "utc": datetime.now(timezone.utc).isoformat(),
     }
 
 
 @app.post("/telemetry")
 def ingest_telemetry(sample: Telemetry) -> dict:
-    global REQUEST_COUNT
-    REQUEST_COUNT += 1
-    LATEST[sample.robot_id] = sample
-    HISTORY[sample.robot_id].append(sample)
+    db.store_sample(sample.model_dump())
     return {
         "accepted": True,
         "robot_id": sample.robot_id,
         "server_time": datetime.now(timezone.utc).isoformat(),
-        "note": "Starter mode: data is stored only in RAM.",
     }
 
 
 @app.get("/robots")
 def list_robots() -> list[dict]:
-    return [sample.model_dump() for sample in LATEST.values()]
+    return db.latest_samples()
 
 
 @app.get("/robots/{robot_id}/history")
 def robot_history(robot_id: str) -> list[dict]:
-    if robot_id not in HISTORY:
+    samples = db.history(robot_id)
+    if not samples:
         raise HTTPException(status_code=404, detail="Robot not found")
-    return [sample.model_dump() for sample in HISTORY[robot_id]]
+    return samples
 
 MODEL_PATH = Path(
     os.getenv(
@@ -129,13 +162,18 @@ def predict(sample: PredictionRequest) -> dict:
 
 @app.get("/metrics")
 def metrics() -> dict:
-    # TODO E4: extend with latency, errors, throughput and model metrics.
-    return {
-        "requests_received": REQUEST_COUNT,
-        "robots_in_memory": len(LATEST),
-        "persistence": "RAM_ONLY",
-        "prediction_service": "NOT_IMPLEMENTED",
-    }
+    with METRICS_LOCK:
+        return {
+            "requests_received": TELEMETRY_REQUESTS,
+            "telemetry_requests": TELEMETRY_REQUESTS,
+            "prediction_requests": PREDICTION_REQUESTS,
+            "errors": ERRORS,
+            "average_prediction_latency_ms": (
+                round(PREDICTION_TIME_MS / PREDICTION_REQUESTS, 2)
+                if PREDICTION_REQUESTS else 0.0
+            ),
+            "uptime_seconds": round(perf_counter() - STARTED, 2),
+        }
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
