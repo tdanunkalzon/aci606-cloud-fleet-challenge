@@ -26,4 +26,4 @@
                   +-------------------+
 ```
 
-The starter implements only the top-left part in memory. Exercise 4 is to complete the system.
+The API writes telemetry to PostgreSQL when DATABASE_URL is configured. Local runs use a SQLite file.

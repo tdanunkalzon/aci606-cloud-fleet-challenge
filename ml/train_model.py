@@ -1,13 +1,8 @@
-"""Exercise 4 training starter.
-
-Students must complete this script. The goal is not to copy a fixed model but to
-build a reproducible training pipeline and justify the chosen model.
-"""
+"""Compare and evaluate classifiers on disjoint fleets."""
 import joblib
 from sklearn.metrics import confusion_matrix, f1_score
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import f1_score
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from pathlib import Path
@@ -38,7 +33,6 @@ def main() -> None:
     print("\nClass distribution:")
     print(df[TARGET].value_counts())
 
-    # TODO E4
     splitter = GroupShuffleSplit(
         n_splits=1,
         test_size=0.25,
@@ -54,6 +48,10 @@ def main() -> None:
 
     print("Flotas de entrenamiento:", sorted(train["fleet_id"].unique()))
     print("Flotas de prueba:", sorted(test["fleet_id"].unique()))
+    print("\nValores faltantes en el conjunto de entrenamiento:")
+    print(train[FEATURES].isna().sum())
+    print("\nMediana de las variables por clase en el conjunto de entrenamiento:")
+    print(train.groupby(TARGET)[FEATURES].median().round(3).to_string())
 
     # Separamos las 12 flotas de entrenamiento en 9 de ajuste y 3 de validación.
     validation_split = GroupShuffleSplit(
@@ -115,6 +113,12 @@ def main() -> None:
         zero_division=0,
     )
     matrix = confusion_matrix(test[TARGET], test_predictions, labels=labels)
+    majority_class = train[TARGET].mode().iloc[0]
+    baseline_score = f1_score(
+        test[TARGET], [majority_class] * len(test), labels=labels,
+        average="macro", zero_division=0,
+    )
+    print(f"Clase mayoritaria ({majority_class}) | F1 macro de prueba: {baseline_score:.4f}")
 
     print(f"\n{winner_name} | F1 macro de prueba: {test_score:.4f}")
     print("Matriz de confusión (filas reales, columnas predichas):")
