@@ -76,8 +76,9 @@ macro F1 (0.9422 versus 0.9394 for Random Forest). The pipeline is tracked in
    with `sslmode=require`. Keep it in Render's environment settings. The API
    creates the telemetry table on startup and stores the full history in Neon.
    Local runs without `DATABASE_URL` use the ignored `fleet.db` SQLite file.
-4. Record the assigned public HTTPS URL here after deployment. Check `/health`
-   first, then run the smoke test and start the fleet against that URL.
+4. The [public dashboard](https://aci606-cloud-fleet-challenge-vsw9.onrender.com/dashboard)
+   is deployed on Render. Check `/health` first, then run the smoke test and
+   start the fleet against the service URL.
 
 ```bash
 python tests/smoke_test.py --api "$FLEET_API_URL" --final
